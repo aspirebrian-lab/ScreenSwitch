@@ -38,3 +38,6 @@ System Settings → General → Login Items → **+** → ScreenSwitch.
 An event tap watches left mouse clicks. If the window under the cursor belongs to an inactive app,
 ScreenSwitch lets that click through (macOS focuses the app) and sends the same click again
 ~0.12 s later. Drags are ignored.
+
+## License
+MIT, see [LICENSE](LICENSE).
