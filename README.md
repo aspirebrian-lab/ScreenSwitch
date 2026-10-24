@@ -1,40 +1,40 @@
 # ScreenSwitch
 
-Een kleine macOS-menubalk-app die het "eerste klik focust alleen"-gedrag van macOS oplost.
-Klik je op een venster van een andere app, dan wordt die klik meteen ook uitgevoerd, zoals op Windows.
+A small macOS menu bar app that fixes the "first click only focuses" behavior of macOS.
+When you click a window that belongs to a different app, the click is performed right away, just like on Windows.
 
-## Installeren
+## Installation
 
-**Via de installer (aanbevolen)**
-1. Download de nieuwste `ScreenSwitch-x.y.z.dmg` onder [Releases](../../releases).
-2. Open de DMG en sleep ScreenSwitch naar Programma's.
-3. Start de app en geef toestemming onder Systeeminstellingen → Privacy en beveiliging → Toegankelijkheid.
+**Using the installer (recommended)**
+1. Download the latest `ScreenSwitch-x.y.z.dmg` from [Releases](../../releases).
+2. Open the DMG and drag ScreenSwitch to Applications.
+3. Launch the app and grant access under System Settings → Privacy & Security → Accessibility.
 
-> Is de DMG niet genotariseerd, dan toont macOS een waarschuwing. Open de app dan eenmalig
-> via rechtsklik → Open.
+> If the DMG is not notarized, macOS shows a warning. In that case, open the app once
+> via right-click → Open.
 
-**Vanuit de broncode** (Xcode Command Line Tools nodig)
+**From source** (requires the Xcode Command Line Tools)
 ```bash
-git clone <deze-repo>
+git clone <this-repo>
 cd ScreenSwitch
-./build.sh        # bouwt en installeert in /Applications
+./build.sh        # builds and installs to /Applications
 ```
 
-## Een installer maken
+## Building an installer
 ```bash
 VERSION=1.0.0 ./package.sh
 ```
-Het resultaat staat in `dist/`. Voor een DMG zonder Gatekeeper-waarschuwing is een
-Developer ID-certificaat en notarisatie nodig, zie de uitleg bovenaan [package.sh](package.sh).
+The result is placed in `dist/`. A DMG without a Gatekeeper warning requires a
+Developer ID certificate and notarization; see the notes at the top of [package.sh](package.sh).
 
-## Instellingen
-Klik op het icoon in de menubalk → **Settings…** om met een slider de vertraging (0–500 ms)
-voor de tweede klik in te stellen. Standaard is 120 ms.
+## Settings
+Click the menu bar icon → **Settings…** to adjust the delay (0–500 ms) before the second click
+with a slider. The default is 120 ms.
 
-## Starten bij inloggen
-Systeeminstellingen → Algemeen → Inloggen en toevoegen → **+** → ScreenSwitch.
+## Launch at login
+System Settings → General → Login Items → **+** → ScreenSwitch.
 
-## Hoe het werkt
-Een event tap volgt linkermuisklikken. Hoort het venster onder de cursor bij een niet-actieve app,
-dan laat ScreenSwitch die klik door (macOS focust) en stuurt ~0,12 s later dezelfde klik opnieuw.
-Slepen wordt overgeslagen.
+## How it works
+An event tap watches left mouse clicks. If the window under the cursor belongs to an inactive app,
+ScreenSwitch lets that click through (macOS focuses the app) and sends the same click again
+~0.12 s later. Drags are ignored.
