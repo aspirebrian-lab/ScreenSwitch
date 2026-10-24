@@ -1,0 +1,8 @@
+# Build-uitvoer
+dist/
+*.app
+*.dmg
+
+# macOS / tooling
+.DS_Store
+.claude/
