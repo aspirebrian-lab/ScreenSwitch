@@ -22,15 +22,15 @@ fi
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
-# Install the latest release (github.com/<repo>/releases/latest redirects to its tag).
-# Falls back to the main branch if there is no release yet.
+# Install the latest release, asked from the GitHub API.
+# Falls back to the main branch if there is no release (or the API can't be reached).
 if [[ -n "${SCREENSWITCH_TARBALL_URL:-}" ]]; then
     TARBALL_URL="$SCREENSWITCH_TARBALL_URL"
     VERSION="custom"
 else
-    LATEST=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" || true)
-    VERSION="${LATEST##*/tag/}"
-    if [[ "$LATEST" == */tag/* && -n "$VERSION" ]]; then
+    VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
+        | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1 || true)
+    if [[ -n "$VERSION" ]]; then
         TARBALL_URL="https://github.com/$REPO/archive/refs/tags/$VERSION.tar.gz"
     else
         VERSION="main"
