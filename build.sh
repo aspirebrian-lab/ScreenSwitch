@@ -47,13 +47,6 @@ EOF
 IDENTITY=$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development|Developer ID/ {print $2; exit}')
 codesign --force --sign "${IDENTITY:--}" "$APP"
 
-# Used by package.sh: build only, do not install.
-if [[ -n "${APP_OUT:-}" ]]; then
-    rm -rf "$APP_OUT"
-    cp -R "$APP" "$APP_OUT"
-    exit 0
-fi
-
 pkill -x ScreenSwitch || true
 rm -rf /Applications/ScreenSwitch.app
 cp -R "$APP" /Applications/

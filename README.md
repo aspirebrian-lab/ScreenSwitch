@@ -5,27 +5,25 @@ When you click a window that belongs to a different app, the click is performed 
 
 ## Installation
 
-**Using the installer (recommended)**
-1. Download the latest `ScreenSwitch-x.y.z.dmg` from [Releases](../../releases).
-2. Open the DMG and drag ScreenSwitch to Applications.
-3. Launch the app and grant access under System Settings → Privacy & Security → Accessibility.
+Run this in the Terminal (requires the Xcode Command Line Tools, install them with `xcode-select --install`):
 
-> If the DMG is not notarized, macOS shows a warning. In that case, open the app once
-> via right-click → Open.
-
-**From source** (requires the Xcode Command Line Tools)
 ```bash
-git clone <this-repo>
+curl -fsSL https://raw.githubusercontent.com/aspirebrian-lab/ScreenSwitch/main/install.sh | bash
+```
+
+This downloads the source, builds the app on your Mac and installs it to `/Applications`.
+Because it is built locally, macOS shows no "unverified developer" warning.
+
+Then grant access under System Settings → Privacy & Security → Accessibility.
+
+**Manually**
+```bash
+git clone https://github.com/aspirebrian-lab/ScreenSwitch.git
 cd ScreenSwitch
 ./build.sh        # builds and installs to /Applications
 ```
 
-## Building an installer
-```bash
-VERSION=1.0.0 ./package.sh
-```
-The result is placed in `dist/`. A DMG without a Gatekeeper warning requires a
-Developer ID certificate and notarization; see the notes at the top of [package.sh](package.sh).
+To update, run the install command again. You may need to re-grant the Accessibility permission.
 
 ## Settings
 Click the menu bar icon → **Settings…** to adjust the delay (0–500 ms) before the second click

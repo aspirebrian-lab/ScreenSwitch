@@ -49,6 +49,23 @@ enum Settings {
 
 let dragTolerance: CGFloat = 4
 
+/// Owner pid of the topmost normal window under a point (global, top-left based coordinates).
+func topWindowOwnerPid(at point: CGPoint) -> pid_t? {
+    guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+            as? [[String: Any]] else { return nil }
+    for w in list {  // ordered front to back
+        guard (w[kCGWindowLayer as String] as? Int) == 0,
+              (w[kCGWindowAlpha as String] as? Double ?? 1) > 0,
+              let boundsDict = w[kCGWindowBounds as String] as? NSDictionary,
+              let bounds = CGRect(dictionaryRepresentation: boundsDict),
+              bounds.contains(point),
+              let pid = w[kCGWindowOwnerPID as String] as? pid_t
+        else { continue }
+        return pid
+    }
+    return nil
+}
+
 final class ClickReplayer {
     var enabled = true
     var tap: CFMachPort?
@@ -97,23 +114,12 @@ final class ClickReplayer {
     /// the frontmost one, returns the pid of the frontmost app.
     private func frontmostPidIfClickIsOnBackgroundApp(at point: CGPoint) -> pid_t? {
         guard let front = NSWorkspace.shared.frontmostApplication?.processIdentifier,
-              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+              let pid = topWindowOwnerPid(at: point),
+              pid != front, pid != getpid()
         else { return nil }
-
-        for w in list {  // ordered front to back
-            guard (w[kCGWindowLayer as String] as? Int) == 0,
-                  (w[kCGWindowAlpha as String] as? Double ?? 1) > 0,
-                  let boundsDict = w[kCGWindowBounds as String] as? NSDictionary,
-                  let bounds = CGRect(dictionaryRepresentation: boundsDict),
-                  bounds.contains(point),
-                  let pid = w[kCGWindowOwnerPID as String] as? pid_t
-            else { continue }
-            guard pid != front, pid != getpid() else { return nil }
-            if let id = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
-               Settings.excludedApps.contains(id) { return nil }
-            return front
-        }
-        return nil
+        if let id = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
+           Settings.excludedApps.contains(id) { return nil }
+        return front
     }
 
     private static func postClick(at point: CGPoint) {
@@ -135,6 +141,10 @@ final class SmoothScroller: NSObject {
     private var remainingX = 0.0
     private var remainingY = 0.0
     private var flags: CGEventFlags = []
+    // The glide stays with the app and spot where you last turned the wheel, even if the
+    // cursor moves on to another window in the meantime.
+    private var targetPid: pid_t = 0
+    private var location = CGPoint.zero
     private var displayLink: CADisplayLink?
     private var fallbackTimer: DispatchSourceTimer?
     private var lastTick = CFAbsoluteTimeGetCurrent()
@@ -157,6 +167,21 @@ final class SmoothScroller: NSObject {
         let dx = event.getDoubleValueField(.scrollWheelEventDeltaAxis2)
         guard dx != 0 || dy != 0 else { return Unmanaged.passUnretained(event) }
 
+        let point = event.location
+        let pid: pid_t
+        if isRunning, point == location {
+            pid = targetPid
+        } else if let found = topWindowOwnerPid(at: point) {
+            pid = found
+        } else {
+            return Unmanaged.passUnretained(event)
+        }
+        if isRunning, pid != targetPid {  // you started scrolling somewhere else: drop the old glide
+            remainingX = 0
+            remainingY = 0
+        }
+        targetPid = pid
+        location = point
         remainingY += dy * pixelsPerLine
         remainingX += dx * pixelsPerLine
         flags = event.flags
@@ -207,11 +232,11 @@ final class SmoothScroller: NSObject {
         if x != 0 || y != 0,
            let e = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
                            wheel1: y, wheel2: x, wheel3: 0) {
-            // No explicit location: the event uses the cursor's *current* position,
-            // so it never drags the pointer back to where it was when you turned the wheel.
+            // Delivered straight to the target app, so it never moves the real pointer and
+            // keeps going to the original window while the cursor is elsewhere.
+            e.location = location
             e.flags = flags
-            e.setIntegerValueField(.eventSourceUserData, value: scrollMarker)
-            e.post(tap: .cghidEventTap)
+            e.postToPid(targetPid)
         }
         if remainingX == 0 && remainingY == 0 { stopTimer() }
     }

@@ -1,7 +1,5 @@
-# Build-uitvoer
-dist/
+# Build output
 *.app
-*.dmg
 
 # macOS / tooling
 .DS_Store
