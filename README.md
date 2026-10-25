@@ -40,6 +40,11 @@ Mouse wheels scroll in steps on macOS. Turn on **Smooth Scrolling** in the menu 
 Settings) to get eased, trackpad-like scrolling. The *Smoothness* slider sets how long the glide lasts.
 Trackpad scrolling and scrolling with ⌘/⌃/⌥ held are left untouched.
 
+By default the glide stops as soon as the cursor moves onto another app, so it never scrolls
+that app. Turn on **Keep gliding in the original window** in Settings to let the glide finish in
+the window you scrolled, even after the cursor leaves it. This sends the glide as a trackpad-style
+gesture, so pages can briefly stretch past their edges (rubber-banding), just like with a trackpad.
+
 ## Launch at login
 System Settings → General → Login Items → **+** → ScreenSwitch.
 

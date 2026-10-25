@@ -24,6 +24,12 @@ enum Settings {
         set { UserDefaults.standard.set(newValue, forKey: smoothScrollingKey) }
     }
 
+    static let keepGlideKey = "keepGlideInWindow"
+    static var keepGlideInWindow: Bool {
+        get { UserDefaults.standard.bool(forKey: keepGlideKey) }
+        set { UserDefaults.standard.set(newValue, forKey: keepGlideKey) }
+    }
+
     static let smoothnessKey = "smoothnessMs"
     static let defaultSmoothnessMs = 150.0
     static let smoothnessRangeMs = 50.0...400.0
@@ -64,6 +70,18 @@ func topWindowOwnerPid(at point: CGPoint) -> pid_t? {
         return pid
     }
     return nil
+}
+
+/// Owner pid of whatever window is on top under a point, at any level (panels, popovers,
+/// floating windows): the window that scroll events actually go to.
+func scrollTargetPid(at point: CGPoint) -> pid_t? {
+    guard let primary = NSScreen.screens.first else { return nil }
+    let cocoaPoint = NSPoint(x: point.x, y: primary.frame.height - point.y)
+    let number = NSWindow.windowNumber(at: cocoaPoint, belowWindowWithWindowNumber: 0)
+    guard number > 0,
+          let info = (CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(number)) as? [[String: Any]])?.first
+    else { return nil }
+    return info[kCGWindowOwnerPID as String] as? pid_t
 }
 
 final class ClickReplayer {
@@ -170,7 +188,7 @@ final class SmoothScroller: NSObject {
         let pid: pid_t
         if isRunning, point == location {
             pid = targetPid
-        } else if let found = topWindowOwnerPid(at: point) {
+        } else if let found = scrollTargetPid(at: point) {
             pid = found
         } else {
             return Unmanaged.passUnretained(event)
@@ -178,6 +196,7 @@ final class SmoothScroller: NSObject {
         if isRunning, pid != targetPid {  // you started scrolling somewhere else: drop the old glide
             remainingX = 0
             remainingY = 0
+            endGesture()
         }
         targetPid = pid
         location = point
@@ -226,12 +245,12 @@ final class SmoothScroller: NSObject {
         let tau = Settings.smoothnessMs / 1000 / 3
         let k = 1 - exp(-dt / tau)
 
-        // Scroll events always go to the window under the real cursor (giving them another
-        // location moves the cursor, and apps ignore events posted straight to them). So if
-        // the cursor has moved onto another app, end the glide instead of scrolling that app.
-        if let cursor = CGEvent(source: nil)?.location, cursor != location {
+        let keepInWindow = Settings.keepGlideInWindow
+        // Without a gesture, scroll events go to the window under the cursor. So if the cursor
+        // has moved onto another app, end the glide instead of scrolling that app.
+        if !keepInWindow, let cursor = CGEvent(source: nil)?.location, cursor != location {
             location = cursor
-            if topWindowOwnerPid(at: cursor) != targetPid {
+            if scrollTargetPid(at: cursor) != targetPid {
                 remainingX = 0
                 remainingY = 0
                 stopTimer()
@@ -241,15 +260,42 @@ final class SmoothScroller: NSObject {
 
         let y = Self.step(&remainingY, k)
         let x = Self.step(&remainingX, k)
-        if x != 0 || y != 0,
-           let e = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
-                           wheel1: y, wheel2: x, wheel3: 0) {
-            // No explicit location: the event uses the cursor's current position.
-            e.flags = flags
-            e.setIntegerValueField(.eventSourceUserData, value: scrollMarker)
-            e.post(tap: .cghidEventTap)
+        if x != 0 || y != 0 {
+            if keepInWindow {
+                postScroll(y: y, x: x, phase: inGesture ? .changed : .began)
+                inGesture = true
+            } else {
+                postScroll(y: y, x: x, phase: nil)
+            }
         }
-        if remainingX == 0 && remainingY == 0 { stopTimer() }
+        if remainingX == 0 && remainingY == 0 {
+            endGesture()
+            stopTimer()
+        }
+    }
+
+    // With "keep gliding in window" on, each glide is sent as one scroll gesture like a
+    // trackpad (began → changed → ended). macOS keeps a gesture latched to the window it
+    // started in, so the glide keeps going there even when the cursor moves onto another app.
+    // The catch: apps then also rubber-band past their edges, like with a trackpad.
+    private var inGesture = false
+
+    private func endGesture() {
+        guard inGesture else { return }
+        postScroll(y: 0, x: 0, phase: .ended)
+        inGesture = false
+    }
+
+    private func postScroll(y: Int32, x: Int32, phase: CGScrollPhase?) {
+        guard let e = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
+                              wheel1: y, wheel2: x, wheel3: 0) else { return }
+        // No explicit location: that would move the cursor.
+        e.flags = flags
+        if let phase {
+            e.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
+        }
+        e.setIntegerValueField(.eventSourceUserData, value: scrollMarker)
+        e.post(tap: .cghidEventTap)
     }
 
     /// Consumes a fraction of what's left and returns whole pixels to scroll now.
@@ -272,6 +318,8 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource 
     private let smoothSlider = NSSlider(value: Settings.smoothnessMs, minValue: Settings.smoothnessRangeMs.lowerBound,
                                         maxValue: Settings.smoothnessRangeMs.upperBound, target: nil, action: nil)
     private let smoothLabel = NSTextField(labelWithString: "")
+    private let keepGlideCheckbox = NSButton(checkboxWithTitle: "Keep gliding in the original window when the cursor leaves it",
+                                             target: nil, action: nil)
 
     init() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 10),
@@ -322,6 +370,13 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource 
         smoothLabel.widthAnchor.constraint(equalToConstant: 60).isActive = true
         let smoothRow = NSStackView(views: [NSTextField(labelWithString: "Smoothness"), smoothSlider, smoothLabel])
         smoothRow.spacing = 10
+        keepGlideCheckbox.target = self
+        keepGlideCheckbox.action = #selector(keepGlideToggled)
+        let keepGlideHint = NSTextField(wrappingLabelWithString:
+            "Scrolls like a trackpad, so pages can briefly stretch past their edges. "
+            + "When off, the glide stops as soon as the cursor moves onto another app.")
+        keepGlideHint.font = .systemFont(ofSize: 11)
+        keepGlideHint.textColor = .secondaryLabelColor
 
         let excludedHeading = NSTextField(labelWithString: "Apps that already accept the first click")
         excludedHeading.font = .boldSystemFont(ofSize: 13)
@@ -347,7 +402,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource 
         let listButtons = NSStackView(views: [add, remove, NSView()])
 
         let stack = NSStackView(views: [heading, sliderRow, hint, buttonRow,
-                                        smoothHeading, smoothCheckbox, smoothRow,
+                                        smoothHeading, smoothCheckbox, smoothRow, keepGlideCheckbox, keepGlideHint,
                                         excludedHeading, excludedHint, scroll, listButtons])
         stack.orientation = .vertical
         stack.alignment = .width
@@ -372,6 +427,8 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource 
         smoothCheckbox.state = Settings.smoothScrolling ? .on : .off
         smoothSlider.doubleValue = Settings.smoothnessMs
         smoothSlider.isEnabled = Settings.smoothScrolling
+        keepGlideCheckbox.state = Settings.keepGlideInWindow ? .on : .off
+        keepGlideCheckbox.isEnabled = Settings.smoothScrolling
         smoothLabel.stringValue = "\(Int(Settings.smoothnessMs)) ms"
         slider.doubleValue = Settings.delayMs
         valueLabel.stringValue = "\(Int(Settings.delayMs)) ms"
@@ -408,6 +465,11 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource 
 
     @objc private func smoothToggled() {
         Settings.smoothScrolling = smoothCheckbox.state == .on
+        refresh()
+    }
+
+    @objc private func keepGlideToggled() {
+        Settings.keepGlideInWindow = keepGlideCheckbox.state == .on
         refresh()
     }
 
