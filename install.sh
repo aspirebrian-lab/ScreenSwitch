@@ -5,7 +5,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/aspirebrian-lab/ScreenSwitch/main/install.sh | bash
 set -euo pipefail
 
-TARBALL_URL="${SCREENSWITCH_TARBALL_URL:-https://github.com/aspirebrian-lab/ScreenSwitch/archive/refs/heads/main.tar.gz}"
+REPO="aspirebrian-lab/ScreenSwitch"
 
 if [[ "$(uname)" != "Darwin" ]]; then
     echo "ScreenSwitch only runs on macOS." >&2
@@ -22,7 +22,23 @@ fi
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
-echo "Downloading ScreenSwitch…"
+# Install the latest release (github.com/<repo>/releases/latest redirects to its tag).
+# Falls back to the main branch if there is no release yet.
+if [[ -n "${SCREENSWITCH_TARBALL_URL:-}" ]]; then
+    TARBALL_URL="$SCREENSWITCH_TARBALL_URL"
+    VERSION="custom"
+else
+    LATEST=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" || true)
+    VERSION="${LATEST##*/tag/}"
+    if [[ "$LATEST" == */tag/* && -n "$VERSION" ]]; then
+        TARBALL_URL="https://github.com/$REPO/archive/refs/tags/$VERSION.tar.gz"
+    else
+        VERSION="main"
+        TARBALL_URL="https://github.com/$REPO/archive/refs/heads/main.tar.gz"
+    fi
+fi
+
+echo "Downloading ScreenSwitch ($VERSION)…"
 curl -fsSL "$TARBALL_URL" | tar -xz -C "$WORK" --strip-components=1
 
 echo "Building…"

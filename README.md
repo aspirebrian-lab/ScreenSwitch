@@ -11,7 +11,8 @@ Run this in the Terminal (requires the Xcode Command Line Tools, install them wi
 curl -fsSL https://raw.githubusercontent.com/aspirebrian-lab/ScreenSwitch/main/install.sh | bash
 ```
 
-This downloads the source, builds the app on your Mac and installs it to `/Applications`.
+This downloads the source of the [latest release](https://github.com/aspirebrian-lab/ScreenSwitch/releases/latest),
+builds the app on your Mac and installs it to `/Applications`.
 Because it is built locally, macOS shows no "unverified developer" warning.
 
 Then grant access under System Settings → Privacy & Security → Accessibility.
@@ -24,6 +25,7 @@ cd ScreenSwitch
 ```
 
 To update, run the install command again. You may need to re-grant the Accessibility permission.
+See [Releases](https://github.com/aspirebrian-lab/ScreenSwitch/releases) for what changed in each version.
 
 ## Settings
 Click the menu bar icon → **Settings…** to adjust the delay (0–500 ms) before the second click
