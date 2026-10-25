@@ -6,6 +6,7 @@ import ApplicationServices
 // replay the same click once the app is active, so it behaves like Windows.
 
 let replayMarker: Int64 = 0x53535731  // "SSW1": tags our synthetic clicks
+let scrollMarker: Int64 = 0x53535732  // "SSW2": tags our synthetic scroll events
 
 enum Settings {
     static let delayKey = "replayDelayMs"
@@ -15,6 +16,20 @@ enum Settings {
     static var delayMs: Double {
         get { UserDefaults.standard.object(forKey: delayKey) as? Double ?? defaultDelayMs }
         set { UserDefaults.standard.set(newValue, forKey: delayKey) }
+    }
+
+    static let smoothScrollingKey = "smoothScrolling"
+    static var smoothScrolling: Bool {
+        get { UserDefaults.standard.bool(forKey: smoothScrollingKey) }
+        set { UserDefaults.standard.set(newValue, forKey: smoothScrollingKey) }
+    }
+
+    static let smoothnessKey = "smoothnessMs"
+    static let defaultSmoothnessMs = 150.0
+    static let smoothnessRangeMs = 50.0...400.0
+    static var smoothnessMs: Double {
+        get { UserDefaults.standard.object(forKey: smoothnessKey) as? Double ?? defaultSmoothnessMs }
+        set { UserDefaults.standard.set(newValue, forKey: smoothnessKey) }
     }
 
     /// Apps that already handle the first click themselves; replaying would double-click.
@@ -82,7 +97,7 @@ final class ClickReplayer {
     /// the frontmost one, returns the pid of the frontmost app.
     private func frontmostPidIfClickIsOnBackgroundApp(at point: CGPoint) -> pid_t? {
         guard let front = NSWorkspace.shared.frontmostApplication?.processIdentifier,
-              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]
+              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
         else { return nil }
 
         for w in list {  // ordered front to back
@@ -113,11 +128,114 @@ final class ClickReplayer {
     }
 }
 
+/// Turns the stepped scrolling of a mouse wheel into smooth, eased pixel scrolling
+/// (like a trackpad). Trackpad and other continuous scroll events pass through untouched.
+final class SmoothScroller: NSObject {
+    var tap: CFMachPort?
+    private var remainingX = 0.0
+    private var remainingY = 0.0
+    private var flags: CGEventFlags = []
+    private var displayLink: CADisplayLink?
+    private var fallbackTimer: DispatchSourceTimer?
+    private var lastTick = CFAbsoluteTimeGetCurrent()
+    // Private source: our synthetic events don't mix with the real mouse's state.
+    private let source = CGEventSource(stateID: .privateState)
+    private let pixelsPerLine = 40.0
+
+    func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            return Unmanaged.passUnretained(event)
+        }
+        guard Settings.smoothScrolling,
+              event.getIntegerValueField(.eventSourceUserData) != scrollMarker,
+              event.getIntegerValueField(.scrollWheelEventIsContinuous) == 0,
+              event.flags.intersection([.maskCommand, .maskControl, .maskAlternate]).isEmpty
+        else { return Unmanaged.passUnretained(event) }
+
+        let dy = event.getDoubleValueField(.scrollWheelEventDeltaAxis1)
+        let dx = event.getDoubleValueField(.scrollWheelEventDeltaAxis2)
+        guard dx != 0 || dy != 0 else { return Unmanaged.passUnretained(event) }
+
+        remainingY += dy * pixelsPerLine
+        remainingX += dx * pixelsPerLine
+        flags = event.flags
+        startTimer()
+        return nil  // swallow the stepped event; we emit smooth ones instead
+    }
+
+    private var isRunning: Bool { displayLink != nil || fallbackTimer != nil }
+
+    /// Ticks in sync with the screen's refresh rate so the glide looks even.
+    private func startTimer() {
+        guard !isRunning else { return }
+        lastTick = CFAbsoluteTimeGetCurrent()
+        if #available(macOS 14.0, *) {
+            let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main
+            if let link = screen?.displayLink(target: self, selector: #selector(displayTick)) {
+                link.add(to: .main, forMode: .common)
+                displayLink = link
+                return
+            }
+        }
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now(), repeating: .milliseconds(8))
+        t.setEventHandler { [weak self] in self?.tick() }
+        t.resume()
+        fallbackTimer = t
+    }
+
+    private func stopTimer() {
+        displayLink?.invalidate()
+        displayLink = nil
+        fallbackTimer?.cancel()
+        fallbackTimer = nil
+    }
+
+    @objc private func displayTick() { tick() }
+
+    private func tick() {
+        let now = CFAbsoluteTimeGetCurrent()
+        let dt = min(now - lastTick, 0.05)
+        lastTick = now
+        // Exponential ease-out: the larger the smoothness, the longer the glide.
+        let tau = Settings.smoothnessMs / 1000 / 3
+        let k = 1 - exp(-dt / tau)
+
+        let y = Self.step(&remainingY, k)
+        let x = Self.step(&remainingX, k)
+        if x != 0 || y != 0,
+           let e = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
+                           wheel1: y, wheel2: x, wheel3: 0) {
+            // No explicit location: the event uses the cursor's *current* position,
+            // so it never drags the pointer back to where it was when you turned the wheel.
+            e.flags = flags
+            e.setIntegerValueField(.eventSourceUserData, value: scrollMarker)
+            e.post(tap: .cghidEventTap)
+        }
+        if remainingX == 0 && remainingY == 0 { stopTimer() }
+    }
+
+    /// Consumes a fraction of what's left and returns whole pixels to scroll now.
+    private static func step(_ remaining: inout Double, _ k: Double) -> Int32 {
+        guard abs(remaining) >= 0.5 else { remaining = 0; return 0 }
+        var s = (remaining * k).rounded()
+        if s == 0 { s = remaining > 0 ? 1 : -1 }
+        if abs(s) > abs(remaining) { s = remaining.rounded() }
+        remaining -= s
+        return Int32(s)
+    }
+}
+
 final class SettingsWindowController: NSWindowController, NSTableViewDataSource {
     private let slider = NSSlider(value: Settings.delayMs, minValue: Settings.delayRangeMs.lowerBound,
                                   maxValue: Settings.delayRangeMs.upperBound, target: nil, action: nil)
     private let valueLabel = NSTextField(labelWithString: "")
     private let table = NSTableView()
+    private let smoothCheckbox = NSButton(checkboxWithTitle: "Smooth scrolling for mouse wheels", target: nil, action: nil)
+    private let smoothSlider = NSSlider(value: Settings.smoothnessMs, minValue: Settings.smoothnessRangeMs.lowerBound,
+                                        maxValue: Settings.smoothnessRangeMs.upperBound, target: nil, action: nil)
+    private let smoothLabel = NSTextField(labelWithString: "")
 
     init() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 10),
@@ -156,6 +274,19 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource 
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let buttonRow = NSStackView(views: [spacer, reset])
 
+        let smoothHeading = NSTextField(labelWithString: "Scrolling")
+        smoothHeading.font = .boldSystemFont(ofSize: 13)
+        smoothCheckbox.target = self
+        smoothCheckbox.action = #selector(smoothToggled)
+        smoothSlider.target = self
+        smoothSlider.action = #selector(smoothnessChanged)
+        smoothLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        smoothLabel.alignment = .right
+        smoothLabel.setContentHuggingPriority(.required, for: .horizontal)
+        smoothLabel.widthAnchor.constraint(equalToConstant: 60).isActive = true
+        let smoothRow = NSStackView(views: [NSTextField(labelWithString: "Smoothness"), smoothSlider, smoothLabel])
+        smoothRow.spacing = 10
+
         let excludedHeading = NSTextField(labelWithString: "Apps that already accept the first click")
         excludedHeading.font = .boldSystemFont(ofSize: 13)
         let excludedHint = NSTextField(wrappingLabelWithString:
@@ -180,6 +311,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource 
         let listButtons = NSStackView(views: [add, remove, NSView()])
 
         let stack = NSStackView(views: [heading, sliderRow, hint, buttonRow,
+                                        smoothHeading, smoothCheckbox, smoothRow,
                                         excludedHeading, excludedHint, scroll, listButtons])
         stack.orientation = .vertical
         stack.alignment = .width
@@ -201,12 +333,16 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource 
 
     private func refresh() {
         table.reloadData()
+        smoothCheckbox.state = Settings.smoothScrolling ? .on : .off
+        smoothSlider.doubleValue = Settings.smoothnessMs
+        smoothSlider.isEnabled = Settings.smoothScrolling
+        smoothLabel.stringValue = "\(Int(Settings.smoothnessMs)) ms"
         slider.doubleValue = Settings.delayMs
         valueLabel.stringValue = "\(Int(Settings.delayMs)) ms"
     }
 
     @objc private func sliderChanged() {
-        Settings.delayMs = (slider.doubleValue / 10).rounded() * 10  // stappen van 10 ms
+        Settings.delayMs = (slider.doubleValue / 10).rounded() * 10  // steps of 10 ms
         refresh()
     }
 
@@ -234,6 +370,16 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource 
         table.reloadData()
     }
 
+    @objc private func smoothToggled() {
+        Settings.smoothScrolling = smoothCheckbox.state == .on
+        refresh()
+    }
+
+    @objc private func smoothnessChanged() {
+        Settings.smoothnessMs = (smoothSlider.doubleValue / 10).rounded() * 10
+        refresh()
+    }
+
     @objc private func resetToDefault() {
         Settings.delayMs = Settings.defaultDelayMs
         refresh()
@@ -248,9 +394,11 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource 
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let replayer = ClickReplayer()
+    let scroller = SmoothScroller()
     var statusItem: NSStatusItem!
     var toggleItem: NSMenuItem!
     var excludeItem: NSMenuItem!
+    var smoothItem: NSMenuItem!
     lazy var settingsWindow = SettingsWindowController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -263,6 +411,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(toggleItem)
         excludeItem = NSMenuItem(title: "", action: #selector(toggleExcludeFrontmost), keyEquivalent: "")
         menu.addItem(excludeItem)
+        smoothItem = NSMenuItem(title: "Smooth Scrolling", action: #selector(toggleSmoothScrolling), keyEquivalent: "")
+        menu.addItem(smoothItem)
         menu.delegate = self
         menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
         menu.addItem(.separator())
@@ -274,6 +424,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// The menu bar icon doesn't steal focus, so "frontmost" is the app you were just using.
     func menuNeedsUpdate(_ menu: NSMenu) {
+        smoothItem.state = Settings.smoothScrolling ? .on : .off
         if let app = NSWorkspace.shared.frontmostApplication, let id = app.bundleIdentifier, id != Bundle.main.bundleIdentifier {
             excludeItem.title = "Don't replay clicks in \(app.localizedName ?? id)"
             excludeItem.state = Settings.excludedApps.contains(id) ? .on : .off
@@ -284,6 +435,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             excludeItem.isEnabled = false
         }
     }
+
+    @objc func toggleSmoothScrolling() { Settings.smoothScrolling.toggle() }
 
     @objc func toggleExcludeFrontmost() {
         guard let id = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return }
@@ -311,21 +464,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func startTap() -> Bool {
-        let mask = CGEventMask(1 << CGEventType.leftMouseDown.rawValue | 1 << CGEventType.leftMouseUp.rawValue)
-        let callback: CGEventTapCallBack = { _, type, event, refcon in
+        let clickMask = CGEventMask(1 << CGEventType.leftMouseDown.rawValue | 1 << CGEventType.leftMouseUp.rawValue)
+        let clickCallback: CGEventTapCallBack = { _, type, event, refcon in
             let replayer = Unmanaged<ClickReplayer>.fromOpaque(refcon!).takeUnretainedValue()
             return replayer.handle(type: type, event: event)
         }
+        guard let clickTap = Self.makeTap(mask: clickMask, options: .listenOnly, callback: clickCallback,
+                                          owner: replayer) else { return false }
+        replayer.tap = clickTap
+
+        // Scrolling needs an active tap (it replaces events), but only sees scroll events.
+        let scrollMask = CGEventMask(1 << CGEventType.scrollWheel.rawValue)
+        let scrollCallback: CGEventTapCallBack = { _, type, event, refcon in
+            let scroller = Unmanaged<SmoothScroller>.fromOpaque(refcon!).takeUnretainedValue()
+            return scroller.handle(type: type, event: event)
+        }
+        scroller.tap = Self.makeTap(mask: scrollMask, options: .defaultTap, callback: scrollCallback, owner: scroller)
+        return true
+    }
+
+    private static func makeTap(mask: CGEventMask, options: CGEventTapOptions,
+                                callback: @escaping CGEventTapCallBack, owner: AnyObject) -> CFMachPort? {
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
-                                          options: .listenOnly, eventsOfInterest: mask,
-                                          callback: callback,
-                                          userInfo: Unmanaged.passUnretained(replayer).toOpaque())
-        else { return false }
-        replayer.tap = tap
+                                          options: options, eventsOfInterest: mask, callback: callback,
+                                          userInfo: Unmanaged.passUnretained(owner).toOpaque())
+        else { return nil }
         let src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), src, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
-        return true
+        return tap
     }
 }
 

@@ -31,13 +31,24 @@ Developer ID certificate and notarization; see the notes at the top of [package.
 Click the menu bar icon → **Settings…** to adjust the delay (0–500 ms) before the second click
 with a slider. The default is 120 ms.
 
+## Excluded apps
+Some apps (System Settings, for example) already act on the very first click themselves. Replaying
+the click there would toggle a control twice. Such apps can be excluded: choose
+**Don't replay clicks in …** from the menu bar icon while that app is in front, or manage the list
+under **Settings…**. System Settings is excluded by default.
+
+## Smooth scrolling
+Mouse wheels scroll in steps on macOS. Turn on **Smooth Scrolling** in the menu bar (or in
+Settings) to get eased, trackpad-like scrolling. The *Smoothness* slider sets how long the glide lasts.
+Trackpad scrolling and scrolling with ⌘/⌃/⌥ held are left untouched.
+
 ## Launch at login
 System Settings → General → Login Items → **+** → ScreenSwitch.
 
 ## How it works
 An event tap watches left mouse clicks. If the window under the cursor belongs to an inactive app,
 ScreenSwitch lets that click through (macOS focuses the app) and sends the same click again
-~0.12 s later. Drags are ignored.
+~0.12 s later (adjustable), but only if the click really changed the focused app. Drags are ignored.
 
 ## License
 MIT, see [LICENSE](LICENSE).

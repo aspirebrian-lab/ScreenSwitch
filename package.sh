@@ -1,14 +1,14 @@
 #!/bin/zsh
-# Maakt dist/ScreenSwitch-<versie>.dmg: een installer waarin de gebruiker de app
-# naar Programma's sleept.
+# Creates dist/ScreenSwitch-<version>.dmg: an installer where the user drags the
+# app to Applications.
 #
-# Voor publieke distributie (zonder Gatekeeper-waarschuwing) is nodig:
-#   - een "Developer ID Application"-certificaat (Apple Developer Program)
-#   - notarisatie. Eenmalig opslaan van je inloggegevens:
+# Distributing without a Gatekeeper warning requires:
+#   - a "Developer ID Application" certificate (Apple Developer Program)
+#   - notarization. Store your credentials once:
 #       xcrun notarytool store-credentials screenswitch-notary
-#     en daarna draaien met:  NOTARY_PROFILE=screenswitch-notary ./package.sh
-# Zonder die twee werkt de DMG wel, maar moeten gebruikers de app de eerste keer
-# openen via rechtsklik → Open.
+#     then run:  NOTARY_PROFILE=screenswitch-notary ./package.sh
+# Without both, the DMG still works, but users must open the app the first time
+# via right-click → Open.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -20,38 +20,38 @@ DMG="$DIST/ScreenSwitch-$VERSION.dmg"
 rm -rf "$DIST"
 mkdir -p "$DIST"
 
-# 1. App bouwen (zonder te installeren)
+# 1. Build the app (without installing)
 APP_OUT="$PWD/$APP" ./build.sh
 /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VERSION" "$APP/Contents/Info.plist" 2>/dev/null \
     || /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
 
-# 2. Ondertekenen voor distributie
+# 2. Sign for distribution
 DEV_ID=$(security find-identity -v -p codesigning | awk -F'"' '/Developer ID Application/ {print $2; exit}')
 if [[ -n "$DEV_ID" ]]; then
-    echo "Ondertekenen met: $DEV_ID"
+    echo "Signing with: $DEV_ID"
     codesign --force --options runtime --timestamp --sign "$DEV_ID" "$APP"
 else
-    echo "⚠️  Geen Developer ID-certificaat gevonden: de DMG is niet geschikt voor Gatekeeper."
+    echo "⚠️  No Developer ID certificate found: the DMG will not pass Gatekeeper."
     IDENTITY=$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development/ {print $2; exit}')
     codesign --force --sign "${IDENTITY:--}" "$APP"
 fi
 
-# 3. DMG maken (app + snelkoppeling naar Programma's)
+# 3. Create the DMG (app + shortcut to Applications)
 STAGE=$(mktemp -d)
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 hdiutil create -volname "ScreenSwitch" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 rm -rf "$STAGE"
 
-# 4. Notariseren (optioneel)
+# 4. Notarize (optional)
 if [[ -n "$DEV_ID" && -n "${NOTARY_PROFILE:-}" ]]; then
     codesign --force --sign "$DEV_ID" --timestamp "$DMG"
     xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
     xcrun stapler staple "$DMG"
 fi
 
-# De losse .app niet laten staan (Launchpad/Spotlight zou hem als tweede kopie tonen)
+# Remove the loose .app (Launchpad/Spotlight would show it as a second copy)
 rm -rf "$APP"
 
-echo "Klaar: $DMG"
+echo "Done: $DMG"
 shasum -a 256 "$DMG"

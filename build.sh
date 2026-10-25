@@ -1,6 +1,6 @@
 #!/bin/zsh
-# Bouwt ScreenSwitch.app in een tijdelijke map en installeert hem in /Applications
-# (zo staat er maar één kopie die Launchpad/Spotlight kan vinden).
+# Builds ScreenSwitch.app in a temp folder and installs it to /Applications
+# (so only one copy exists for Launchpad/Spotlight to find).
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -11,7 +11,7 @@ mkdir -p "$APP/Contents/MacOS"
 
 swiftc -O main.swift -o "$APP/Contents/MacOS/ScreenSwitch"
 
-# Icoon: teken 1024px PNG en bouw er een .icns van
+# Icon: draw a 1024px PNG and turn it into an .icns
 ICONSET="$WORK/Icon.iconset"
 mkdir -p "$ICONSET"
 swiftc -O make-icon.swift -o "$WORK/make-icon"
@@ -42,12 +42,12 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
 </plist>
 EOF
 
-# Onderteken met een vaste identiteit, zodat de Toegankelijkheid-toestemming
-# behouden blijft tussen builds (een ad-hoc handtekening verandert elke build).
+# Sign with a stable identity so the Accessibility permission survives rebuilds
+# (an ad-hoc signature changes on every build).
 IDENTITY=$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development|Developer ID/ {print $2; exit}')
 codesign --force --sign "${IDENTITY:--}" "$APP"
 
-# Gebruikt door package.sh: alleen bouwen, niet installeren.
+# Used by package.sh: build only, do not install.
 if [[ -n "${APP_OUT:-}" ]]; then
     rm -rf "$APP_OUT"
     cp -R "$APP" "$APP_OUT"
@@ -57,4 +57,4 @@ fi
 pkill -x ScreenSwitch || true
 rm -rf /Applications/ScreenSwitch.app
 cp -R "$APP" /Applications/
-echo "Geïnstalleerd: /Applications/ScreenSwitch.app"
+echo "Installed: /Applications/ScreenSwitch.app"

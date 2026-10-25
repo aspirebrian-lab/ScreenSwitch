@@ -1,6 +1,6 @@
 import Cocoa
 
-// Tekent het app-icoon (1024x1024) en schrijft het als PNG naar het opgegeven pad.
+// Draws the app icon (1024x1024) and writes it as a PNG to the given path.
 let size: CGFloat = 1024
 let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size), pixelsHigh: Int(size),
                            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
@@ -13,7 +13,7 @@ func color(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> NSColo
     NSColor(srgbRed: r / 255, green: g / 255, blue: b / 255, alpha: a)
 }
 
-// macOS-sjabloon: 824pt-vlak in een canvas van 1024 met zachte schaduw.
+// macOS template: 824pt body inside a 1024 canvas with a soft shadow.
 let body = NSRect(x: 100, y: 100, width: 824, height: 824)
 let bodyPath = NSBezierPath(roundedRect: body, xRadius: 185, yRadius: 185)
 
@@ -28,7 +28,7 @@ bodyPath.addClip()
 NSGradient(colors: [color(94, 92, 230), color(10, 132, 255), color(100, 210, 255)],
            atLocations: [0, 0.55, 1], colorSpace: .sRGB)!
     .draw(in: body, angle: 60)
-// subtiele glans bovenaan
+// subtle highlight at the top
 NSGradient(colors: [color(255, 255, 255, 0.28), color(255, 255, 255, 0)])!
     .draw(in: NSRect(x: 100, y: 520, width: 824, height: 404), angle: -90)
 ctx.restoreGState()
@@ -43,7 +43,7 @@ func window(_ rect: NSRect, alpha: CGFloat, shadow: Bool) {
     p.fill()
     ctx.restoreGState()
 
-    // titelbalk met drie stipjes
+    // title bar with three dots
     ctx.saveGState()
     p.addClip()
     color(0, 0, 0, 0.07).setFill()
@@ -55,11 +55,11 @@ func window(_ rect: NSRect, alpha: CGFloat, shadow: Bool) {
     }
 }
 
-// Achterste (niet-actieve) venster en voorste (actieve) venster
+// Back (inactive) window and front (active) window
 window(NSRect(x: 168, y: 330, width: 340, height: 390), alpha: 0.55, shadow: false)
 window(NSRect(x: 436, y: 260, width: 420, height: 470), alpha: 0.97, shadow: true)
 
-// "Klik"-rimpels op het actieve venster
+// Click ripples on the active window
 let center = CGPoint(x: 646, y: 470)
 for (r, a) in [(120.0, 0.18), (78.0, 0.30)] as [(CGFloat, CGFloat)] {
     color(10, 132, 255, a).setStroke()
@@ -68,9 +68,9 @@ for (r, a) in [(120.0, 0.18), (78.0, 0.30)] as [(CGFloat, CGFloat)] {
     ring.stroke()
 }
 
-// Muiscursor
+// Mouse cursor
 let cursor = NSBezierPath()
-let o = CGPoint(x: 612, y: 520)  // punt van de pijl
+let o = CGPoint(x: 612, y: 520)  // tip of the arrow
 cursor.move(to: o)
 cursor.line(to: CGPoint(x: o.x, y: o.y - 230))
 cursor.line(to: CGPoint(x: o.x + 56, y: o.y - 176))
