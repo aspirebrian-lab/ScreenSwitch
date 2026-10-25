@@ -141,8 +141,7 @@ final class SmoothScroller: NSObject {
     private var remainingX = 0.0
     private var remainingY = 0.0
     private var flags: CGEventFlags = []
-    // The glide stays with the app and spot where you last turned the wheel, even if the
-    // cursor moves on to another window in the meantime.
+    // The app under the cursor when the wheel was turned; the glide only ever scrolls that app.
     private var targetPid: pid_t = 0
     private var location = CGPoint.zero
     private var displayLink: CADisplayLink?
@@ -227,16 +226,28 @@ final class SmoothScroller: NSObject {
         let tau = Settings.smoothnessMs / 1000 / 3
         let k = 1 - exp(-dt / tau)
 
+        // Scroll events always go to the window under the real cursor (giving them another
+        // location moves the cursor, and apps ignore events posted straight to them). So if
+        // the cursor has moved onto another app, end the glide instead of scrolling that app.
+        if let cursor = CGEvent(source: nil)?.location, cursor != location {
+            location = cursor
+            if topWindowOwnerPid(at: cursor) != targetPid {
+                remainingX = 0
+                remainingY = 0
+                stopTimer()
+                return
+            }
+        }
+
         let y = Self.step(&remainingY, k)
         let x = Self.step(&remainingX, k)
         if x != 0 || y != 0,
            let e = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
                            wheel1: y, wheel2: x, wheel3: 0) {
-            // Delivered straight to the target app, so it never moves the real pointer and
-            // keeps going to the original window while the cursor is elsewhere.
-            e.location = location
+            // No explicit location: the event uses the cursor's current position.
             e.flags = flags
-            e.postToPid(targetPid)
+            e.setIntegerValueField(.eventSourceUserData, value: scrollMarker)
+            e.post(tap: .cghidEventTap)
         }
         if remainingX == 0 && remainingY == 0 { stopTimer() }
     }
