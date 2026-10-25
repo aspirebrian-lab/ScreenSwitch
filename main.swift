@@ -23,7 +23,7 @@ let dragTolerance: CGFloat = 4
 final class ClickReplayer {
     var enabled = true
     var tap: CFMachPort?
-    private var pendingDown: CGPoint?
+    private var pendingDown: (point: CGPoint, frontBefore: pid_t)?
 
     func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -36,14 +36,24 @@ final class ClickReplayer {
 
         switch type {
         case .leftMouseDown:
-            pendingDown = isClickOnBackgroundApp(at: event.location) ? event.location : nil
+            if let front = frontmostPidIfClickIsOnBackgroundApp(at: event.location) {
+                pendingDown = (event.location, front)
+            } else {
+                pendingDown = nil
+            }
         case .leftMouseUp:
             if let down = pendingDown {
                 pendingDown = nil
                 let up = event.location
                 // Skip drags (e.g. moving a window by its title bar).
-                if hypot(up.x - down.x, up.y - down.y) <= dragTolerance {
+                if hypot(up.x - down.point.x, up.y - down.point.y) <= dragTolerance {
+                    let frontBefore = down.frontBefore
                     DispatchQueue.main.asyncAfter(deadline: .now() + Settings.delayMs / 1000) {
+                        // Only replay if the click really changed the focused app.
+                        // Otherwise the app was already active (some apps own their
+                        // windows via a helper process) and we would double-click.
+                        let frontNow = NSWorkspace.shared.frontmostApplication?.processIdentifier
+                        guard frontNow != frontBefore else { return }
                         Self.postClick(at: up)
                     }
                 }
@@ -54,12 +64,12 @@ final class ClickReplayer {
         return Unmanaged.passUnretained(event)
     }
 
-    /// True if the topmost normal window under the point belongs to an app
-    /// other than the frontmost one.
-    private func isClickOnBackgroundApp(at point: CGPoint) -> Bool {
+    /// If the topmost normal window under the point belongs to an app other than
+    /// the frontmost one, returns the pid of the frontmost app.
+    private func frontmostPidIfClickIsOnBackgroundApp(at point: CGPoint) -> pid_t? {
         guard let front = NSWorkspace.shared.frontmostApplication?.processIdentifier,
               let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]
-        else { return false }
+        else { return nil }
 
         for w in list {  // ordered front to back
             guard (w[kCGWindowLayer as String] as? Int) == 0,
@@ -69,9 +79,9 @@ final class ClickReplayer {
                   bounds.contains(point),
                   let pid = w[kCGWindowOwnerPID as String] as? pid_t
             else { continue }
-            return pid != front && pid != getpid()
+            return (pid != front && pid != getpid()) ? front : nil
         }
-        return false
+        return nil
     }
 
     private static func postClick(at point: CGPoint) {
