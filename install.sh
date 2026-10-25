@@ -32,6 +32,7 @@ else
         | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1 || true)
     if [[ -n "$VERSION" ]]; then
         TARBALL_URL="https://github.com/$REPO/archive/refs/tags/$VERSION.tar.gz"
+        export SCREENSWITCH_VERSION="$VERSION"  # the downloaded source has no git history
     else
         VERSION="main"
         TARBALL_URL="https://github.com/$REPO/archive/refs/heads/main.tar.gz"

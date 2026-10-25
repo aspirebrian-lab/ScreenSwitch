@@ -24,7 +24,12 @@ rm "$ICONSET/base.png"
 mkdir -p "$APP/Contents/Resources"
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/Icon.icns"
 
-cat > "$APP/Contents/Info.plist" <<'EOF'
+# Version comes from the release tag: passed in by install.sh, or read from git in a clone
+# (e.g. "1.0.0", or "1.0.0-3-gabc1234" for commits after a release). "dev" otherwise.
+VERSION="${SCREENSWITCH_VERSION:-$(git describe --tags 2>/dev/null || echo dev)}"
+VERSION="${VERSION#v}"
+
+cat > "$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -35,7 +40,7 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
     <key>CFBundleIconFile</key><string>Icon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleVersion</key><string>1</string>
-    <key>CFBundleShortVersionString</key><string>1.0.0</string>
+    <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>LSMinimumSystemVersion</key><string>12.0</string>
     <key>LSUIElement</key><true/>
 </dict>

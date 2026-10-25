@@ -504,6 +504,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.button?.image = NSImage(systemSymbolName: "cursorarrow.click.2", accessibilityDescription: "ScreenSwitch")
 
         let menu = NSMenu()
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        menu.addItem(NSMenuItem(title: "ScreenSwitch \(version)", action: nil, keyEquivalent: ""))  // no action: shown greyed out
+        menu.addItem(.separator())
         toggleItem = NSMenuItem(title: "Enabled", action: #selector(toggle), keyEquivalent: "")
         toggleItem.state = .on
         menu.addItem(toggleItem)
