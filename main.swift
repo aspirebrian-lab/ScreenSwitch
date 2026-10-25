@@ -16,6 +16,20 @@ enum Settings {
         get { UserDefaults.standard.object(forKey: delayKey) as? Double ?? defaultDelayMs }
         set { UserDefaults.standard.set(newValue, forKey: delayKey) }
     }
+
+    /// Apps that already handle the first click themselves; replaying would double-click.
+    static let excludedKey = "excludedBundleIDs"
+    static let defaultExcluded = ["com.apple.systempreferences"]
+
+    static var excludedApps: [String] {
+        get { UserDefaults.standard.stringArray(forKey: excludedKey) ?? defaultExcluded }
+        set { UserDefaults.standard.set(newValue, forKey: excludedKey) }
+    }
+
+    static func displayName(forBundleID id: String) -> String {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { return id }
+        return FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
+    }
 }
 
 let dragTolerance: CGFloat = 4
@@ -79,7 +93,10 @@ final class ClickReplayer {
                   bounds.contains(point),
                   let pid = w[kCGWindowOwnerPID as String] as? pid_t
             else { continue }
-            return (pid != front && pid != getpid()) ? front : nil
+            guard pid != front, pid != getpid() else { return nil }
+            if let id = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
+               Settings.excludedApps.contains(id) { return nil }
+            return front
         }
         return nil
     }
@@ -96,10 +113,11 @@ final class ClickReplayer {
     }
 }
 
-final class SettingsWindowController: NSWindowController {
+final class SettingsWindowController: NSWindowController, NSTableViewDataSource {
     private let slider = NSSlider(value: Settings.delayMs, minValue: Settings.delayRangeMs.lowerBound,
                                   maxValue: Settings.delayRangeMs.upperBound, target: nil, action: nil)
     private let valueLabel = NSTextField(labelWithString: "")
+    private let table = NSTableView()
 
     init() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 10),
@@ -138,7 +156,31 @@ final class SettingsWindowController: NSWindowController {
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let buttonRow = NSStackView(views: [spacer, reset])
 
-        let stack = NSStackView(views: [heading, sliderRow, hint, buttonRow])
+        let excludedHeading = NSTextField(labelWithString: "Apps that already accept the first click")
+        excludedHeading.font = .boldSystemFont(ofSize: 13)
+        let excludedHint = NSTextField(wrappingLabelWithString:
+            "ScreenSwitch will not click again in these apps. Add an app if clicking a switch or "
+            + "checkbox in it as the first click toggles it twice.")
+        excludedHint.font = .systemFont(ofSize: 11)
+        excludedHint.textColor = .secondaryLabelColor
+
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("app"))
+        column.isEditable = false
+        table.addTableColumn(column)
+        table.headerView = nil
+        table.dataSource = self
+        let scroll = NSScrollView()
+        scroll.documentView = table
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        scroll.heightAnchor.constraint(equalToConstant: 100).isActive = true
+
+        let add = NSButton(title: "Add App…", target: self, action: #selector(addExcludedApp))
+        let remove = NSButton(title: "Remove", target: self, action: #selector(removeExcludedApp))
+        let listButtons = NSStackView(views: [add, remove, NSView()])
+
+        let stack = NSStackView(views: [heading, sliderRow, hint, buttonRow,
+                                        excludedHeading, excludedHint, scroll, listButtons])
         stack.orientation = .vertical
         stack.alignment = .width
         stack.spacing = 12
@@ -158,6 +200,7 @@ final class SettingsWindowController: NSWindowController {
     }
 
     private func refresh() {
+        table.reloadData()
         slider.doubleValue = Settings.delayMs
         valueLabel.stringValue = "\(Int(Settings.delayMs)) ms"
     }
@@ -165,6 +208,30 @@ final class SettingsWindowController: NSWindowController {
     @objc private func sliderChanged() {
         Settings.delayMs = (slider.doubleValue / 10).rounded() * 10  // stappen van 10 ms
         refresh()
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { Settings.excludedApps.count }
+
+    func tableView(_ tableView: NSTableView, objectValueFor tableColumn: NSTableColumn?, row: Int) -> Any? {
+        Settings.displayName(forBundleID: Settings.excludedApps[row])
+    }
+
+    @objc private func addExcludedApp() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.application]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        guard panel.runModal() == .OK, let url = panel.url,
+              let id = Bundle(url: url)?.bundleIdentifier,
+              !Settings.excludedApps.contains(id) else { return }
+        Settings.excludedApps.append(id)
+        table.reloadData()
+    }
+
+    @objc private func removeExcludedApp() {
+        let row = table.selectedRow
+        guard row >= 0 else { return }
+        Settings.excludedApps.remove(at: row)
+        table.reloadData()
     }
 
     @objc private func resetToDefault() {
@@ -179,10 +246,11 @@ final class SettingsWindowController: NSWindowController {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let replayer = ClickReplayer()
     var statusItem: NSStatusItem!
     var toggleItem: NSMenuItem!
+    var excludeItem: NSMenuItem!
     lazy var settingsWindow = SettingsWindowController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -193,12 +261,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         toggleItem = NSMenuItem(title: "Enabled", action: #selector(toggle), keyEquivalent: "")
         toggleItem.state = .on
         menu.addItem(toggleItem)
+        excludeItem = NSMenuItem(title: "", action: #selector(toggleExcludeFrontmost), keyEquivalent: "")
+        menu.addItem(excludeItem)
+        menu.delegate = self
         menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit ScreenSwitch", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
 
         requestAccessAndStart()
+    }
+
+    /// The menu bar icon doesn't steal focus, so "frontmost" is the app you were just using.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        if let app = NSWorkspace.shared.frontmostApplication, let id = app.bundleIdentifier, id != Bundle.main.bundleIdentifier {
+            excludeItem.title = "Don't replay clicks in \(app.localizedName ?? id)"
+            excludeItem.state = Settings.excludedApps.contains(id) ? .on : .off
+            excludeItem.isEnabled = true
+        } else {
+            excludeItem.title = "Don't replay clicks in this app"
+            excludeItem.state = .off
+            excludeItem.isEnabled = false
+        }
+    }
+
+    @objc func toggleExcludeFrontmost() {
+        guard let id = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return }
+        var list = Settings.excludedApps
+        if let i = list.firstIndex(of: id) { list.remove(at: i) } else { list.append(id) }
+        Settings.excludedApps = list
     }
 
     @objc func showSettings() { settingsWindow.show() }
